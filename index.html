@@ -542,7 +542,11 @@
       const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       const myKey = getMyKey();
 
-      const { data: queue } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
+      let { data: queue } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
+      if (queue && queue.player1_key && queue.player2_key) {
+        await supabase.from('matchmaking').update({ player1_key: null, player2_key: null, updated_at: new Date().toISOString() }).eq('id', 1);
+        queue = { ...queue, player1_key: null, player2_key: null };
+      }
       if (queue && queue.player1_key && !queue.player2_key && queue.player1_key !== myKey) {
         await supabase.from('matchmaking').update({ player2_key: myKey, updated_at: new Date().toISOString() }).eq('id', 1);
       } else if (!queue || !queue.player1_key) {
