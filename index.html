@@ -517,8 +517,11 @@
 
     let realtimeRoomId = null;
     let realtimeUnsub = [];
+    let realtimePollTimer = null;
 
     function leaveRealtime() {
+      if (realtimePollTimer) clearInterval(realtimePollTimer);
+      realtimePollTimer = null;
       realtimeUnsub.forEach(ch => { try { ch.unsubscribe(); } catch(e) {} });
       realtimeUnsub.length = 0;
       realtimeRoomId = null;
@@ -581,16 +584,44 @@
       chRooms.subscribe();
       realtimeUnsub.push(chRooms);
 
-      setTimeout(async () => {
+      async function tryMatch() {
+        if (realtimeRoomId) return;
         const { data: q } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
-        if (q && q.player1_key && q.player2_key && (q.player1_key === myKey || q.player2_key === myKey)) {
-          const { data: existing } = await supabase.from('rooms').select('id').eq('player1_key', q.player1_key).eq('player2_key', q.player2_key).order('created_at', { ascending: false }).limit(1).single();
-          if (existing) enterRoom(supabase, existing.id, myKey, q.player1_key, q.player2_key);
+        if (!q) return;
+        const p1 = q.player1_key, p2 = q.player2_key;
+        if (!p1 || !p2) return;
+        if (p1 !== myKey && p2 !== myKey) return;
+
+        if (p1 === myKey) {
+          let { data: room } = await supabase.from('rooms').select('id').eq('player1_key', p1).eq('player2_key', p2).order('created_at', { ascending: false }).limit(1).single();
+          if (!room) {
+            const res = await supabase.from('rooms').insert({ player1_key: p1, player2_key: p2, round: 1, status: 'playing' }).select('id').single();
+            room = res.data;
+            if (room) await supabase.from('matchmaking').update({ player1_key: null, player2_key: null }).eq('id', 1);
+          }
+          if (room) {
+            if (realtimePollTimer) clearInterval(realtimePollTimer);
+            realtimePollTimer = null;
+            enterRoom(supabase, room.id, myKey, p1, p2);
+          }
+        } else {
+          const { data: existing } = await supabase.from('rooms').select('id').eq('player1_key', p1).eq('player2_key', p2).order('created_at', { ascending: false }).limit(1).single();
+          if (existing) {
+            if (realtimePollTimer) clearInterval(realtimePollTimer);
+            realtimePollTimer = null;
+            enterRoom(supabase, existing.id, myKey, p1, p2);
+          }
         }
-      }, 800);
+      }
+
+      setTimeout(tryMatch, 400);
+      realtimePollTimer = setInterval(tryMatch, 1200);
     }
 
     function enterRoom(supabase, roomId, myKey, p1Key, p2Key) {
+      if (realtimeRoomId) return;
+      if (realtimePollTimer) clearInterval(realtimePollTimer);
+      realtimePollTimer = null;
       realtimeUnsub.forEach(ch => { try { ch.unsubscribe(); } catch(e) {} });
       realtimeUnsub.length = 0;
       realtimeRoomId = roomId;
