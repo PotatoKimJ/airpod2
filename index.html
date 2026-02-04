@@ -239,6 +239,13 @@
     .final-panel.lose h2 { color: #f87171; }
     .final-panel.draw h2 { color: var(--muted); }
 
+    .shell.realtime { justify-content: flex-start; padding: 24px 0; text-align: center; }
+    .realtime-status { font-size: 1.1rem; color: var(--muted); margin: 24px 0; min-height: 1.5em; }
+    .realtime-status.found { color: var(--brand); font-weight: 700; }
+    .realtime .choice-btn { margin: 4px; }
+    .realtime .choice-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .realtime-waiting { color: var(--muted); font-size: 0.95rem; margin-top: 8px; }
+
     @media (min-width: 480px) {
       body { padding: 24px; }
       .shell { max-width: 520px; }
@@ -254,7 +261,8 @@
         <section class="hero-copy">
           <h1><span>콩한쪽</span><br>잃어버린 에어팟을 건 운명의 게임</h1>
           <div class="hero-ctas">
-            <a class="primary nav-link" href="#" data-page="match">AI 매칭하기</a>
+            <a class="primary nav-link" href="#" data-page="match">AI 매칭하기 (데모)</a>
+            <a class="primary nav-link" href="#" data-page="realtime">실시간 대전</a>
           </div>
         </section>
         <article class="hero-panel">
@@ -357,7 +365,40 @@
     </div>
   </div>
 
+  <!-- 실시간 대전 -->
+  <div id="page-realtime" class="page">
+    <div class="shell realtime">
+      <a href="#" class="back nav-link" data-page="main">← 메인으로</a>
+      <h1>실시간 대전</h1>
+      <div id="realtimeStatus" class="realtime-status">상대를 찾는 중...</div>
+      <div id="realtimeGame" style="display:none;">
+        <div class="score-board">
+          <span>나: <span id="rtMyScore">0</span></span>
+          <span>상대: <span id="rtOppScore">0</span></span>
+        </div>
+        <div class="round-info" id="rtRoundInfo">1 / 3 판</div>
+        <div class="result-msg" id="rtResultMsg"></div>
+        <div class="choices" id="rtChoices">
+          <button type="button" class="choice-btn rt-choice" data-choice="가위">가위</button>
+          <button type="button" class="choice-btn rt-choice" data-choice="바위">바위</button>
+          <button type="button" class="choice-btn rt-choice" data-choice="보">보</button>
+        </div>
+        <div class="realtime-waiting" id="rtWaiting" style="display:none;">상대 선택 대기 중...</div>
+      </div>
+      <div id="realtimeFinal" class="final-panel" style="display:none;">
+        <h2 id="rtFinalTitle"></h2>
+        <p id="rtFinalDesc"></p>
+        <a href="#" class="btn-again nav-link" data-page="main">메인으로</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+    // Supabase 설정 (https://supabase.com 에서 프로젝트 생성 후 값 입력)
+    const SUPABASE_URL = 'https://alykgcbelypjpjparqnv.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFseWtnY2JlbHlwanBqcGFycW52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxNzg5MzcsImV4cCI6MjA4NTc1NDkzN30.TUWFWWgq02DRxTdlwC0YsvTPWdVThV_mz1kVbA7sKDY';
+
     const modelNames = {
       '1gen': 'AirPods (1세대)',
       '2gen': 'AirPods (2세대)',
@@ -461,6 +502,200 @@
           }
         }
       });
+    });
+
+    // ---------- 실시간 대전 (Supabase) ----------
+    const CHOICES = ['가위', '바위', '보'];
+    function getMyKey() {
+      let k = localStorage.getItem('kong_key');
+      if (!k) {
+        k = 'k_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+        localStorage.setItem('kong_key', k);
+      }
+      return k;
+    }
+    function computeResult(my, opp) {
+      if (my === opp) return 'draw';
+      if ((my === '가위' && opp === '보') || (my === '바위' && opp === '가위') || (my === '보' && opp === '바위')) return 'win';
+      return 'lose';
+    }
+
+    let realtimeRoomId = null;
+    let realtimeUnsub = [];
+
+    function leaveRealtime() {
+      realtimeUnsub.forEach(ch => { try { ch.unsubscribe(); } catch(e) {} });
+      realtimeUnsub.length = 0;
+      realtimeRoomId = null;
+      document.getElementById('realtimeStatus').textContent = '상대를 찾는 중...';
+      document.getElementById('realtimeStatus').classList.remove('found');
+      document.getElementById('realtimeGame').style.display = 'none';
+      document.getElementById('realtimeFinal').style.display = 'none';
+    }
+
+    async function startRealtime() {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        document.getElementById('realtimeStatus').textContent = 'Supabase URL/키를 설정해 주세요. (index.html 상단)';
+        return;
+      }
+      leaveRealtime();
+      const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      const myKey = getMyKey();
+
+      const { data: queue } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
+      if (queue && queue.player1_key && !queue.player2_key && queue.player1_key !== myKey) {
+        await supabase.from('matchmaking').update({ player2_key: myKey, updated_at: new Date().toISOString() }).eq('id', 1);
+      } else if (!queue || !queue.player1_key) {
+        await supabase.from('matchmaking').update({ player1_key: myKey, updated_at: new Date().toISOString() }).eq('id', 1);
+      } else if (queue.player1_key === myKey) {
+        // 이미 대기 중
+      } else {
+        document.getElementById('realtimeStatus').textContent = '대기열이 가득 찼습니다. 잠시 후 다시 시도해 주세요.';
+        return;
+      }
+
+      const chQueue = supabase.channel('queue').on('postgres_changes', { event: '*', schema: 'public', table: 'matchmaking', filter: 'id=eq.1' }, async (payload) => {
+        const r = payload.new;
+        if (!r || !r.player1_key || !r.player2_key) return;
+        const p1 = r.player1_key;
+        const p2 = r.player2_key;
+        if (p1 !== myKey && p2 !== myKey) return;
+        if (p1 === myKey) {
+          const { data: room } = await supabase.from('rooms').insert({ player1_key: p1, player2_key: p2, round: 1, status: 'playing' }).select('id').single();
+          if (room) {
+            await supabase.from('matchmaking').update({ player1_key: null, player2_key: null }).eq('id', 1);
+            enterRoom(supabase, room.id, myKey, p1, p2);
+          }
+        }
+      });
+      chQueue.subscribe();
+      realtimeUnsub.push(chQueue);
+
+      const chRooms = supabase.channel('my_rooms').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rooms' }, async (payload) => {
+        const r = payload.new;
+        if (r && (r.player1_key === myKey || r.player2_key === myKey)) {
+          realtimeUnsub.forEach(ch => { try { ch.unsubscribe(); } catch(e) {} });
+          realtimeUnsub.length = 0;
+          enterRoom(supabase, r.id, myKey, r.player1_key, r.player2_key);
+        }
+      });
+      chRooms.subscribe();
+      realtimeUnsub.push(chRooms);
+
+      setTimeout(async () => {
+        const { data: q } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
+        if (q && q.player1_key && q.player2_key && (q.player1_key === myKey || q.player2_key === myKey)) {
+          const { data: existing } = await supabase.from('rooms').select('id').or(`player1_key.eq.${myKey},player2_key.eq.${myKey}`).order('created_at', { ascending: false }).limit(1).single();
+          if (existing) enterRoom(supabase, existing.id, myKey, q.player1_key, q.player2_key);
+        }
+      }, 500);
+    }
+
+    function enterRoom(supabase, roomId, myKey, p1Key, p2Key) {
+      realtimeUnsub.forEach(ch => { try { ch.unsubscribe(); } catch(e) {} });
+      realtimeUnsub.length = 0;
+      realtimeRoomId = roomId;
+      const amPlayer1 = p1Key === myKey;
+      document.getElementById('realtimeStatus').textContent = '상대를 찾았습니다!';
+      document.getElementById('realtimeStatus').classList.add('found');
+      document.getElementById('realtimeGame').style.display = 'block';
+
+      const rtMyScoreEl = document.getElementById('rtMyScore');
+      const rtOppScoreEl = document.getElementById('rtOppScore');
+      const rtRoundInfo = document.getElementById('rtRoundInfo');
+      const rtResultMsg = document.getElementById('rtResultMsg');
+      const rtChoices = document.getElementById('rtChoices');
+      const rtWaiting = document.getElementById('rtWaiting');
+      const rtFinal = document.getElementById('realtimeFinal');
+      const rtFinalTitle = document.getElementById('rtFinalTitle');
+      const rtFinalDesc = document.getElementById('rtFinalDesc');
+
+      function renderRoom(room) {
+        const myScore = amPlayer1 ? room.p1_score : room.p2_score;
+        const oppScore = amPlayer1 ? room.p2_score : room.p1_score;
+        rtMyScoreEl.textContent = myScore;
+        rtOppScoreEl.textContent = oppScore;
+        rtRoundInfo.textContent = room.round + ' / 3 판';
+        const myChoice = amPlayer1 ? room.p1_choice : room.p2_choice;
+        const oppChoice = amPlayer1 ? room.p2_choice : room.p1_choice;
+        if (room.status === 'done') {
+          rtChoices.style.display = 'none';
+          rtWaiting.style.display = 'none';
+          rtFinal.style.display = 'block';
+          if (myScore > oppScore) {
+            rtFinalTitle.textContent = '승리!';
+            rtFinalDesc.textContent = '운명의 짝을 찾았습니다.';
+            rtFinal.className = 'final-panel visible win';
+          } else if (myScore < oppScore) {
+            rtFinalTitle.textContent = '패배';
+            rtFinalDesc.textContent = '다음 기회를 노려보세요.';
+            rtFinal.className = 'final-panel visible lose';
+          } else {
+            rtFinalTitle.textContent = '무승부';
+            rtFinalDesc.textContent = '다시 도전해보세요.';
+            rtFinal.className = 'final-panel visible draw';
+          }
+          return;
+        }
+        const bothChose = room.p1_choice && room.p2_choice;
+        if (bothChose) {
+          rtResultMsg.textContent = '나: ' + myChoice + ' vs 상대: ' + oppChoice;
+          rtChoices.style.display = 'none';
+          rtWaiting.style.display = 'block';
+        } else {
+          rtChoices.style.display = 'flex';
+          rtWaiting.style.display = 'none';
+          rtChoices.querySelectorAll('.rt-choice').forEach(btn => btn.disabled = !!myChoice);
+          if (!myChoice) rtResultMsg.textContent = '';
+        }
+      }
+
+      supabase.from('rooms').select('*').eq('id', roomId).single().then(({ data }) => { if (data) renderRoom(data); });
+
+      const chRoom = supabase.channel('room_' + roomId).on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: 'id=eq.' + roomId }, (payload) => {
+        if (payload.new) renderRoom(payload.new);
+      });
+      chRoom.subscribe();
+      realtimeUnsub.push(chRoom);
+
+      rtChoices.querySelectorAll('.rt-choice').forEach(btn => {
+        btn.onclick = async () => {
+          const choice = btn.dataset.choice;
+          if (amPlayer1) {
+            await supabase.from('rooms').update({ p1_choice: choice }).eq('id', roomId);
+          } else {
+            await supabase.from('rooms').update({ p2_choice: choice }).eq('id', roomId);
+          }
+          const { data: room } = await supabase.from('rooms').select('*').eq('id', roomId).single();
+          if (room && room.p1_choice && room.p2_choice && amPlayer1) {
+            const res = computeResult(room.p1_choice, room.p2_choice);
+            let ns1 = room.p1_score, ns2 = room.p2_score;
+            if (res === 'win') ns1++; else if (res === 'lose') ns2++;
+            const nextRound = room.round + 1;
+            const status = nextRound > 3 ? 'done' : 'playing';
+            await supabase.from('rooms').update({
+              round: nextRound,
+              p1_choice: null,
+              p2_choice: null,
+              p1_score: ns1,
+              p2_score: ns2,
+              status
+            }).eq('id', roomId);
+          }
+        };
+      });
+    }
+
+    document.querySelectorAll('.nav-link[data-page="realtime"]').forEach(link => {
+      link.addEventListener('click', function(e) {
+        e.preventDefault();
+        showPage('realtime');
+        startRealtime();
+      });
+    });
+
+    document.getElementById('page-realtime').addEventListener('click', function(e) {
+      if (e.target.classList.contains('nav-link') && e.target.dataset.page === 'main') leaveRealtime();
     });
   </script>
 </body>
