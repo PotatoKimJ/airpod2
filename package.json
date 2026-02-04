@@ -1,0 +1,7 @@
+{
+  "name": "airpod2",
+  "private": true,
+  "scripts": {
+    "watch": "node watch.js"
+  }
+}
