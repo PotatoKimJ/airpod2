@@ -584,10 +584,10 @@
       setTimeout(async () => {
         const { data: q } = await supabase.from('matchmaking').select('*').eq('id', 1).single();
         if (q && q.player1_key && q.player2_key && (q.player1_key === myKey || q.player2_key === myKey)) {
-          const { data: existing } = await supabase.from('rooms').select('id').or(`player1_key.eq.${myKey},player2_key.eq.${myKey}`).order('created_at', { ascending: false }).limit(1).single();
+          const { data: existing } = await supabase.from('rooms').select('id').eq('player1_key', q.player1_key).eq('player2_key', q.player2_key).order('created_at', { ascending: false }).limit(1).single();
           if (existing) enterRoom(supabase, existing.id, myKey, q.player1_key, q.player2_key);
         }
-      }, 500);
+      }, 800);
     }
 
     function enterRoom(supabase, roomId, myKey, p1Key, p2Key) {
@@ -651,7 +651,7 @@
 
       supabase.from('rooms').select('*').eq('id', roomId).single().then(({ data }) => { if (data) renderRoom(data); });
 
-      const chRoom = supabase.channel('room_' + roomId).on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: 'id=eq.' + roomId }, (payload) => {
+      const chRoom = supabase.channel('room_' + roomId.replace(/-/g, '_')).on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: 'id=eq.' + roomId }, (payload) => {
         if (payload.new) renderRoom(payload.new);
       });
       chRoom.subscribe();
